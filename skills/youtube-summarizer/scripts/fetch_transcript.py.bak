@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""
+fetch_transcript.py — Validate URL, fetch and cache YouTube transcript.
+
+Usage:
+  python3 fetch_transcript.py "<url_or_video_id>" "<user_id>"
+
+Outputs JSON:
+  {"status":"ok",        "video_id":"...", "title":"...", "duration":123, "transcript_length":456}
+  {"status":"cache_hit", "video_id":"...", "title":"...", "duration":123}
+  {"status":"error",     "code":"...",     "message":"..."}
+"""
+
+import sys
+import json
+import re
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from utils import extract_video_id, get_cache, ok, error, seconds_to_timestamp
+
+CACHE_TTL = 60 * 60 * 24 * 7  # 7 days
+
+
+def fetch_from_youtube(video_id: str) -> list[dict]:
+    """
+    Fetch transcript segments from YouTube.
+    Returns list of {"text": str, "start": float, "duration": float}
+    Raises sys.exit on any error.
+    """
+    try:
+        from youtube_transcript_api import (
+            YouTubeTranscriptApi,
+            TranscriptsDisabled,
+            NoTranscriptFound,
+            VideoUnavailable,
+            CouldNotRetrieveTranscript,
+        )
+    except ImportError:
+        error("MISSING_DEP", "youtube-transcript-api not installed. Run: pip install youtube-transcript-api")
+
+    try:
+        # Attempt 1: English captions
+        try:
+            raw = YouTubeTranscriptApi.get_transcript(video_id, languages=["en"])
+            return _normalise(raw)
+        except NoTranscriptFound:
+            pass
+
+        # Attempt 2: Any available transcript (auto-generated first)
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+
+        # Try auto-generated English
+        for t in transcript_list:
+            if t.is_generated and t.language_code.startswith("en"):
+                return _normalise(t.fetch())
+
+        # Try any auto-generated
+        for t in transcript_list:
+            if t.is_generated:
+                return _normalise(t.fetch())
+
+        # Try any manual
+        for t in transcript_list:
+            return _normalise(t.fetch())
+
+        error("NO_TRANSCRIPT", "No captions found for this video.")
+
+    except TranscriptsDisabled:
+        error("NO_TRANSCRIPT", "This video has captions disabled by the creator.")
+    except (VideoUnavailable,):
+        error("VIDEO_NOT_FOUND", "Video not found — it may be private, deleted, or region-locked.")
+    except CouldNotRetrieveTranscript as e:
+        error("NO_TRANSCRIPT", f"Could not retrieve transcript: {e}")
+    except Exception as e:
+        msg = str(e)
+        if "429" in msg or "Too Many Requests" in msg.lower():
+            error("RATE_LIMITED", "YouTube is rate-limiting requests. Please wait a minute.")
+        elif "403" in msg:
+            error("VIDEO_NOT_FOUND", "Video is not accessible (private or region-locked).")
+        elif "404" in msg:
+            error("VIDEO_NOT_FOUND", "Video not found.")
+        else:
+            error("TRANSCRIPT_ERROR", f"Unexpected error: {msg}")
+
+
+def _normalise(raw) -> list[dict]:
+    """Normalise transcript list to dicts with text/start/duration keys."""
+    result = []
+    for seg in raw:
+        if hasattr(seg, "text"):
+            result.append({"text": seg.text, "start": float(seg.start), "duration": float(seg.duration)})
+        else:
+            result.append({"text": seg["text"], "start": float(seg["start"]), "duration": float(seg.get("duration", 2.0))})
+    return result
+
+
+def clean(segments: list[dict]) -> list[dict]:
+    """Remove noise tags like [Music], [Applause] and whitespace."""
+    noise = re.compile(r"\[.*?\]|\(.*?\)")
+    cleaned = []
+    for seg in segments:
+        text = noise.sub("", seg["text"]).strip()
+        text = re.sub(r"\s+", " ", text)
+        if len(text) > 2:
+            cleaned.append({"text": text, "start": seg["start"], "duration": seg["duration"]})
+    return cleaned
+
+
+def main():
+    if len(sys.argv) < 3:
+        error("USAGE", "python3 fetch_transcript.py <url> <user_id>")
+
+    raw_input = sys.argv[1].strip()
+    user_id   = sys.argv[2].strip()
+
+    # ── Extract video_id ──────────────────────────────────────────────────
+    video_id = extract_video_id(raw_input)
+    if not video_id:
+        # Maybe it's a bare 11-char ID
+        if re.fullmatch(r"[a-zA-Z0-9_-]{11}", raw_input):
+            video_id = raw_input
+        else:
+            error("INVALID_URL",
+                  "That doesn't look like a valid YouTube link. "
+                  "Try: youtube.com/watch?v=XXXXXXXXXXX")
+
+    # ── Cache check ───────────────────────────────────────────────────────
+    cache = get_cache()
+    key   = f"transcript:{video_id}"
+
+    if key in cache:
+        cached = cache[key]
+        print(json.dumps({
+            "status":   "cache_hit",
+            "video_id": video_id,
+            "title":    cached.get("title", "YouTube Video"),
+            "duration": cached.get("duration", 0),
+        }))
+        sys.exit(0)
+
+    # ── Fetch from YouTube ────────────────────────────────────────────────
+    segments = fetch_from_youtube(video_id)   # exits on error
+    segments = clean(segments)
+
+    if not segments:
+        error("NO_TRANSCRIPT", "Transcript was empty after cleaning.")
+
+    # ── Compute duration ──────────────────────────────────────────────────
+    last     = segments[-1]
+    duration = last["start"] + last.get("duration", 0)
+
+    # ── Persist to cache ──────────────────────────────────────────────────
+    title = "YouTube Video"   # youtube-transcript-api v2 doesn't return video title
+    cache.set(key, {
+        "video_id": video_id,
+        "title":    title,
+        "segments": segments,
+        "duration": duration,
+    }, expire=CACHE_TTL)
+
+    ok({
+        "video_id":          video_id,
+        "title":             title,
+        "duration":          round(duration, 1),
+        "transcript_length": len(segments),
+    })
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,47 @@
+{
+  "version": "1.0",
+  "agent": {
+    "name": "YTSumBot",
+    "description": "A YouTube Summarizer and Q&A assistant",
+    "soul": "./SOUL.md"
+  },
+  "providers": {
+    "default": "gemini",
+    "gemini": {
+      "kind": "google",
+      "model": "gemini-2.0-flash",
+      "apiKey": "${GEMINI_API_KEY}",
+      "maxTokens": 8192,
+      "temperature": 0.3
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "token": "${TELEGRAM_BOT_TOKEN}",
+      "allowedUsers": "${TELEGRAM_ALLOWED_USER_IDS}"
+    }
+  },
+  "skills": {
+    "load": {
+      "extraDirs": ["./skills"]
+    }
+  },
+  "memory": {
+    "enabled": true,
+    "path": "./data/memory"
+  },
+  "security": {
+    "approvals": {
+      "shell": "auto",
+      "fs": "auto"
+    }
+  },
+  "env": {
+    "DATA_DIR": "./data",
+    "CHROMA_PATH": "./data/chroma",
+    "CACHE_PATH": "./data/cache",
+    "SESSIONS_DB": "./data/sessions/sessions.db",
+    "SCRIPTS_DIR": "./skills/youtube-summarizer/scripts"
+  }
+}
