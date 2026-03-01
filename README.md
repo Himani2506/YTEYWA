@@ -46,7 +46,83 @@ Then ask follow-up questions. The bot answers **strictly from the transcript** (
 
 ---
 
+🧠 Advanced System Upgrades (v2)
+1️⃣ Topic-Aware Segmentation (Semantic Chunking)
+Instead of naive 800-character chunks, process_video.py now:
+Splits transcript into 15-second windows
+Embeds each window using all-MiniLM-L6-v2
+Computes cosine similarity between adjacent windows
+Detects sharp similarity drops (topic shifts)
+Creates semantic topic boundaries
+Why This Matters
+Prevents mid-topic cuts
+Improves retrieval precision
+Better handling of podcasts & lectures
+More coherent Q&A responses
+This mimics real document segmentation used in production RAG systems.
 
+
+2️⃣ Parent-Child Retrieval (Hierarchical RAG)
+Each topic becomes:
+Parent (~1500 chars) → rich context
+Children (~400 chars) → precise search units stored in ChromaDB
+Retrieval Flow
+User question
+      ↓
+Embed query (MiniLM)
+      ↓
+ChromaDB finds best CHILD
+      ↓
+Return corresponding PARENT
+      ↓
+Gemini answers with full topic context
+Benefits
+🔍 Child = precise semantic match
+🧠 Parent = complete topic context
+❌ Avoids partial answers
+✅ Improves long-video Q&A reliability
+This design significantly improves retrieval quality over flat chunking.
+
+
+3️⃣ CRAG-lite (Confidence-Aware RAG)
+
+
+answer_question.py implements a lightweight Confidence-Retrieval-Augmented Generation loop.
+Confidence Levels
+Based on ChromaDB similarity distances:
+Score	Meaning
+🟢 High	Strong semantic alignment
+🟡 Medium	Partial alignment
+🔴 Low	Weak or ambiguous match
+Self-Healing Retrieval
+If confidence is low:
+Gemini rewrites the user query
+Retrieval runs again
+Better context is used if found
+Response displays:
+_ (query auto-corrected) _
+This prevents weak-context answers and increases robustness.
+
+
+🤖 Enhanced User Experience
+Smart Follow-Up Buttons
+After every summary, users get tappable suggestions:
+🔎 Ask about a topic
+📌 Extract action points
+🧠 Explain deeper
+📊 Show stats
+Improves engagement and conversational flow.
+
+
+Automatic Language Detection
+Language is auto-detected using Unicode script ranges.
+Example:
+हिंदी में बताओ → Hindi
+தமிழில் சொல்லுங்கள் → Tamil
+ಕನ್ನಡದಲ್ಲಿ ಹೇಳಿ → Kannada
+తెలుగులో చెప్పండి → Telugu
+मराठीत सांगा → Marathi
+Manual switching still supported via /language.
 
 
 
@@ -78,6 +154,8 @@ Open Telegram → find your bot → send any YouTube URL.
 | `/language en` | Switch back to English |
 | `/clear` | Clear session and start fresh |
 
+/eli5	Explain video like I'm 5
+/stats	Show structured video stats card
 **Language switching also works naturally:**
 ```
 "Summarize in Hindi"
@@ -254,7 +332,7 @@ python3 skills/youtube-summarizer/scripts/generate_summary.py \
 ## Edge Cases Handled
 
 | Situation | Response |
-|---|---|
+|---|---| 
 | Invalid URL | Clear error + example |
 | Private / deleted video | `VIDEO_NOT_FOUND` message |
 | No captions on video | `NO_TRANSCRIPT` message |
@@ -266,5 +344,44 @@ python3 skills/youtube-summarizer/scripts/generate_summary.py \
 | Language requested with no video | Save preference, prompt for URL |
 
 ---
+
+
+FINAL 
+
+User (Telegram)
+      │
+      ▼
+OpenClaw Agent
+  ├─ SOUL.md
+  └─ SKILL.md
+       │
+       ▼
+skills/youtube-summarizer/scripts/
+
+fetch_transcript.py
+   → youtube-transcript-api
+   → diskcache (7-day cache)
+
+process_video.py
+   → 15s window segmentation
+   → Cosine similarity boundary detection
+   → Parent-child chunk creation
+   → MiniLM embeddings (CPU)
+   → ChromaDB persistence
+
+generate_summary.py
+   → Retrieve top parents
+   → Gemini 2.0 Flash
+
+answer_question.py
+   → Query embedding
+   → Child retrieval
+   → Parent mapping
+   → Confidence scoring (CRAG-lite)
+   → Auto rewrite if needed
+   → Gemini answer
+
+manage_session.py
+   → SQLite per-user session state
 
 *Eywa SDE Intern Assignment | Stack: OpenClaw + Gemini 2.0 Flash + ChromaDB + SQLite + all-MiniLM-L6-v2*
